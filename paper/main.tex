@@ -1,0 +1,240 @@
+\documentclass[11pt,twocolumn]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{natbib}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{microtype}
+
+\setlength{\columnsep}{0.3in}
+
+\title{\textbf{The Shifting Lexicon of American Power:\\Computational Analysis of Political Language\\in State of the Union Addresses, 1950--2026}}
+
+\author{Calder Katyal\\
+\textit{Yale University}\\
+\textit{CPLT 3250: Computational Approaches to Textuality}\\
+\texttt{calder.katyal@yale.edu}}
+
+\date{Spring 2026}
+
+\begin{document}
+\maketitle
+
+% ===========================================================================
+\begin{abstract}
+\noindent This paper applies computational text analysis to a corpus of 79 State of the Union addresses delivered between 1950 and 2026, spanning fifteen presidencies from Truman through Trump's second term. Using TF-IDF differential analysis, Latent Dirichlet Allocation topic modeling, supervised classification, and t-SNE document embeddings, we find that (1) SOTU vocabulary has transformed substantially across eras, tracking geopolitical and domestic pressures with remarkable fidelity; (2) Democratic and Republican presidents employ measurably different rhetorical vocabularies, with a Linear SVM classifier achieving 92.4\% cross-validated accuracy in distinguishing party from text alone; and (3) temporal proximity is at least as powerful a structuring force as party affiliation in the embedding space. The central argument is that the language of the State of the Union is shaped more by the historical moment a president inhabits than by the party to which the president belongs---a finding with implications for how we understand partisan polarization through text.
+\end{abstract}
+
+% ===========================================================================
+\section{Introduction}
+
+The State of the Union address occupies a peculiar position in the archive of American political language. Mandated by Article~II, Section~3 of the Constitution, it is one of the few textual artifacts produced under nearly identical institutional constraints across decades: a single speaker (the president), a fixed audience (Congress and, since the television era, the public), a recurring occasion, a shared rhetorical purpose. These constraints make the SOTU corpus an unusually controlled object for studying how political language changes---and what those changes reveal about the relationship between rhetoric and historical context.
+
+This paper asks three questions. First, how does the language of SOTU addresses change across the period 1950--2026? Second, do Democratic and Republican presidents use detectably different vocabularies? Third, how well can the methods of computational text analysis---what Moretti \citep{moretti2013} calls ``distant reading''---capture these patterns, and what do those methods fail to see?
+
+The approach draws on a range of methods: vector semantics (TF-IDF), generative topic modeling (LDA), supervised machine learning, and dimensionality reduction for visualization. Following Underwood's \citeyearpar{underwood2019} argument that computational methods can surface patterns ``invisible to human readers operating at the scale of individual texts,'' we treat each address as a document in a corpus and apply distributional methods to detect temporal drift and partisan divergence simultaneously. But we remain attentive to the cautions of Drucker \citeyearpar{drucker2017} and D'Ignazio and Klein \citeyearpar{dignazio2020}, who remind us that data visualization and quantitative modeling encode assumptions---about what is counted, what is comparable, and what is rendered invisible in the act of abstraction.
+
+% ===========================================================================
+\section{Data Curation and Preprocessing}
+
+\subsection{Assembling the Corpus}
+
+The construction of any corpus is an interpretive act, and it is worth describing our choices in some detail. The corpus consists of 79 State of the Union addresses delivered by 15 presidents between 1950 and 2026. Speeches from 1950 through 2020 (73 texts) were sourced from the \texttt{stdlib-js/datasets-sotu} public repository on GitHub, which itself draws on the authoritative collection maintained by the American Presidency Project at UC~Santa Barbara. Speeches from 2021 through 2026---Biden's four addresses and Trump's two second-term addresses---were collected directly from the American Presidency Project (\texttt{presidency.ucsb.edu}), where each address is published as a full transcript with speaker annotations and audience reactions noted inline.
+
+This two-source approach introduces a minor inconsistency: the stdlib-js texts are lightly cleaned, while the Presidency Project transcripts retain stage directions (e.g., ``[Applause]''). We retained these artifacts rather than impose retroactive normalization, on the principle that cleaning decisions risk erasing information about the performative context of speech. The practical effect is negligible---stage directions constitute fewer than 2\% of tokens, and our document-frequency thresholds filter most of them.
+
+The decision to begin in 1950 reflects both pragmatic and analytical considerations. Before the mid-twentieth century, SOTU addresses were almost exclusively written messages sent to Congress---a fundamentally different genre from the televised oral address that became standard after Truman. Our corpus captures a relatively coherent rhetorical form, even as that form evolves from radio-era formality to the applause-punctuated cadences of contemporary addresses.
+
+Table~\ref{tab:corpus} summarizes the corpus by president.
+
+\begin{table}[h]
+\centering
+\small
+\caption{SOTU Corpus Summary by President}
+\label{tab:corpus}
+\begin{tabular}{lccr}
+\toprule
+\textbf{President} & \textbf{Party} & \textbf{Years} & \textbf{$N$} \\
+\midrule
+Truman & D & 1950--53 & 4 \\
+Eisenhower & R & 1953--61 & 9 \\
+Kennedy & D & 1961--63 & 3 \\
+Johnson & D & 1964--69 & 6 \\
+Nixon & R & 1970--74 & 5 \\
+Ford & R & 1975--77 & 3 \\
+Carter & D & 1978--81 & 4 \\
+Reagan & R & 1982--88 & 7 \\
+G.H.W.\ Bush & R & 1989--92 & 4 \\
+Clinton & D & 1993--2000 & 8 \\
+G.W.\ Bush & R & 2001--08 & 8 \\
+Obama & D & 2009--16 & 8 \\
+Trump (1st) & R & 2017--20 & 4 \\
+Biden & D & 2021--24 & 4 \\
+Trump (2nd) & R & 2025--26 & 2 \\
+\midrule
+\textbf{Total} & & & \textbf{79} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The corpus contains 37 Democratic speeches and 42 Republican speeches---a modest imbalance reflecting the distribution of presidential terms across the period. The average speech length is approximately 6,014 words, though with substantial variation: Carter's 1981 written message exceeds 33,000 words, while several Nixon-era messages fall below 3,000. This variance is itself analytically significant, as it indexes the shift from written policy documents to performed oratory.
+
+\subsection{Preprocessing Pipeline}
+
+All texts were tokenized using NLTK's \texttt{word\_tokenize} function and lowercased. For content-word analyses, stopwords were removed using the NLTK English stopword list. For TF-IDF and topic modeling, we retained both unigrams and bigrams, applied a minimum document frequency of 3 and a maximum document frequency threshold of 90\%, and limited the vocabulary to 5,000 features. These parameters follow standard practice in computational text analysis \citep{jockers2013}, balancing vocabulary coverage against noise. Sentence-level statistics (average sentence length, type-token ratio) were computed using NLTK's \texttt{sent\_tokenize} prior to stopword removal, preserving the syntactic structure of the original text.
+
+% ===========================================================================
+\section{Methods and Results}
+
+\subsection{Lexical Trends Over Time}
+
+We begin with what might be called the material history of the SOTU address: how its length and lexical texture have changed over seven decades.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig1_speech_length.pdf}
+\caption{Speech length (word count) and type-token ratio, 1950--2026. Points colored by party; dashed line shows a 5-year rolling average.}
+\label{fig:length}
+\end{figure}
+
+Figure~\ref{fig:length} reveals two clear patterns. First, speech length exhibits a marked decline from the 1950s---when several addresses were delivered as lengthy written messages to Congress---through the television era. The 1960s onward show a stabilization around 5,000--7,000 words, though the most recent addresses (Biden 2021--2024, Trump 2025--2026) trend somewhat longer, perhaps reflecting the increasingly performative and applause-punctuated character of the modern address. Second, the type-token ratio generally increases over time: later presidents draw on a more diverse vocabulary even in shorter speeches. This is consistent with the broader trend toward greater lexical diversity in political language that Underwood \citeyearpar{underwood2019} documents across literary and non-literary corpora alike.
+
+\subsection{Partisan Language: Differential TF-IDF}
+
+To identify the linguistic signatures of each party, we computed TF-IDF vectors for each speech individually and then averaged the resulting feature vectors by party---a per-speech averaging strategy that prevents the longer Carter and Truman messages from dominating the aggregate signal. Figure~\ref{fig:tfidf} shows the top 20 differentially weighted terms for each party.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig2_partisan_tfidf.pdf}
+\caption{Top 20 terms by differential TF-IDF score for each party. Higher scores indicate stronger association with that party's speeches.}
+\label{fig:tfidf}
+\end{figure}
+
+The results are immediately legible as partisan vocabularies. Republican-distinctive terms include \textit{iraq}, \textit{federal government}, \textit{terror}, and \textit{spending}---a lexicon shaped heavily by the George~W.\ Bush era and the party's rhetorical emphasis on limited government and national security. Democratic-distinctive terms include \textit{jobs}, \textit{college}, and first-person colloquialisms (\textit{ve}, \textit{don}---fragments of \textit{I've} and \textit{don't})---reflecting a more informal, direct-address rhetorical mode, especially in the Obama and Biden eras.
+
+But these signatures are not purely ideological. They are also, crucially, \textit{temporal}. The strong Republican association with ``Iraq'' and ``terror'' reflects the historical fact that the longest continuous stretch of Republican SOTU addresses (2001--2008) coincided with the post-9/11 period. The Democratic association with colloquial contractions may say less about ideology than about the evolution of presidential speech toward conversational registers since the 1990s. This entanglement of party and period is a recurring methodological challenge---one that structures the remainder of our analysis.
+
+\subsection{Topic Modeling (LDA)}
+
+We applied Latent Dirichlet Allocation with $k = 8$ topics to the full corpus, following Chang et al.'s \citeyearpar{chang2009} recommendation to label topics by their top words rather than imposing interpretive labels post hoc.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig3a_topic_heatmap.pdf}
+\caption{Mean topic prevalence by decade (LDA, $k=8$). Rows are topics labeled by top-3 words; columns are decades.}
+\label{fig:topics_heat}
+\end{figure}
+
+Figure~\ref{fig:topics_heat} displays topic prevalence by decade as a heatmap. The temporal structure is striking. A topic dominated by \textit{defense, strength, soviet} concentrates in the 1950s and early 1960s, then recedes sharply. A topic centered on \textit{vietnam, billion, tonight} peaks in the 1960s--70s. The \textit{iraq, terrorists, terror} topic is sharply localized to the 2000s. Meanwhile, a topic featuring \textit{going, ve, thank} rises steadily from the 1990s onward---capturing the shift toward conversational, audience-interactive rhetoric in the modern SOTU.
+
+The overall trajectory amounts to a stratigraphy of American political language: Cold War defense rhetoric gives way to Great Society programs, then post-Vietnam economic anxiety, the War on Terror, and finally the colloquial populism of the 2010s--2020s. As Nelson \citeyearpar{nelson2010} argues, topic models work best as ``starting points for interpretation''---guides to where close reading should begin.
+
+\subsection{Supervised Classification}
+
+Can a machine learning classifier predict the president's party from the text of a SOTU address? We tested four classifiers using 5-fold stratified cross-validation on TF-IDF features (3,000 features, unigrams and bigrams). Table~\ref{tab:classification} reports the results.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Party Classification Accuracy (5-Fold CV)}
+\label{tab:classification}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{Mean Acc.} & \textbf{Std.} \\
+\midrule
+Logistic Regression & 0.798 & 0.091 \\
+Linear SVM & \textbf{0.924} & 0.061 \\
+Random Forest & 0.823 & 0.060 \\
+Gradient Boosting & 0.708 & 0.081 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\columnwidth]{figures/fig4a_classification.pdf}
+\caption{Classification accuracy across four models. Error bars show standard deviation across folds. Dashed line indicates chance level (50\%).}
+\label{fig:classification}
+\end{figure}
+
+The Linear SVM achieves 92.4\% accuracy, substantially above the 50\% chance baseline. The addition of the six most recent speeches (four Biden, two Trump) appears to \textit{strengthen} the partisan signal---plausibly because the rhetorical distance between Biden's domestic policy focus and Trump's populist nationalism is wider than in earlier decades. This is consistent with So's \citeyearpar{so2017} observation that even imperfect models can be informative when their behavior is interpretable.
+
+\subsection{Document Embedding Visualization}
+
+To examine the global structure of the corpus without the mediation of a classifier, we projected all 79 speeches into two dimensions using TF-IDF features, dimensionality reduction via Truncated SVD (30 components), and t-SNE (perplexity=15).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig5_embeddings.pdf}
+\caption{t-SNE projection of SOTU addresses. Left: colored by party. Right: colored by decade.}
+\label{fig:embeddings}
+\end{figure}
+
+Figure~\ref{fig:embeddings} is perhaps the most revealing visualization in this paper. The left panel, colored by party, shows meaningful but imperfect clustering: Democratic and Republican speeches tend to occupy different regions of the space, but with substantial overlap. The right panel, colored by decade, tells a different story. Here, the chronological gradient is unmistakable---1950s speeches in one region, 2020s speeches in another, with a smooth temporal progression between. A Clinton speech sits closer to a George~W.\ Bush speech than to a Truman speech, because the shared linguistic context of the 1990s--2000s exerts a stronger gravitational pull than party affiliation.
+
+This aligns with Underwood's \citeyearpar{underwood2019} finding that historical period routinely outweighs other categorical distinctions in large-scale text analysis---and implies that models trained to detect partisanship may inadvertently be detecting periodization.
+
+\subsection{Keyword Trends and Sentence Complexity}
+
+We tracked the per-speech frequency of terms related to four thematic categories---security and defense, economy, social policy, and foreign policy---across the full corpus (Figure~\ref{fig:keywords}).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig7_keyword_trends.pdf}
+\caption{Frequency of key political terms (per 1,000 words) across four thematic domains, 1950--2026.}
+\label{fig:keywords}
+\end{figure}
+
+The trends are historically interpretable. Security and defense language spikes during the Korean War, peaks again during Vietnam, and surges after September~11. Economic language intensifies during recessions and the stagflation era. Social policy terms cluster around the Great Society and the Obama years. Foreign policy language, interestingly, shows its sharpest decline in the 2010s--2020s---a lexical trace of the turn toward domestic populism in both parties.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig6_readability.pdf}
+\caption{Sentence complexity (average words per sentence) and vocabulary diversity by decade and party.}
+\label{fig:readability}
+\end{figure}
+
+Figure~\ref{fig:readability} examines sentence-level complexity. Average sentence length has declined steadily since the 1950s, consistent with the broader trend toward shorter, more direct political communication in the television and social media age. The vocabulary diversity boxplots show that this pattern holds across both parties, though there is considerable within-decade variation.
+
+% ===========================================================================
+\section{Discussion}
+
+Three findings emerge from this analysis, each with implications for how we read political text computationally.
+
+\textbf{The dominance of the temporal signal.} Across every method we applied---topic modeling, keyword tracking, t-SNE visualization, even TF-IDF---historical period proved to be the primary structuring force in SOTU rhetoric. The Cold War speeches of the 1950s are linguistically distant from the post-9/11 addresses of the 2000s, which are in turn distant from the populist rhetoric of the 2020s. This is not a surprising finding in itself, but its consistency across methods is striking. As Sch\"och \citeyearpar{schoch2013} argues, ``big'' data in the humanities is almost always also ``messy'' data: the temporal signal is entangled with every other variable we might wish to isolate.
+
+\textbf{Partisan signatures are real, but historically contingent.} The 92.4\% classification accuracy demonstrates that Democratic and Republican presidents use detectably different language. But the nature of that difference shifts across periods. In the 1950s--60s, partisan language differences are muted---both parties speak the language of Cold War consensus. By the 2000s--2020s, the lexical gap widens considerably. The classifier's strong performance with recent additions suggests that contemporary polarization contributes disproportionately to the partisan signal. This raises a question for future work: is polarization a linguistic reality, or does it merely appear that way because our most recent data is also our most lexically divergent?
+
+\textbf{The limits of the bag of words.} Every method in this paper reduces speeches to distributions over terms, discarding syntax, rhetorical structure, and argumentative logic. This is the foundational trade-off of distant reading: scale for depth. We gain the ability to see patterns across 79 speeches and 76 years, but we lose the ability to analyze how a president builds an argument, deploys anaphora, or shifts register between policy wonkery and patriotic peroration. As Drucker \citeyearpar{drucker2017} argues, the ``distant'' in distant reading is not merely spatial but epistemological---it names a different kind of knowledge, one that complements rather than replaces the close reading of individual texts. The most productive use of these computational results may be precisely to identify \textit{where} close reading should focus: the moments where the model is most confident, or most confused.
+
+\textbf{Limitations.} Our corpus, at 79 documents, is small by machine learning standards, and the class imbalance (37 Democratic, 42 Republican) is modest but non-negligible. SOTU addresses are collaborative texts---produced by speechwriting teams, vetted by advisors, shaped by polling---so attributing linguistic patterns to individual presidents or parties requires caution. Future work might incorporate larger corpora (e.g., all presidential speeches), apply contextual embeddings such as BERT, or adopt the LLM-based topic evaluation methods proposed by Yang et al.\ \citeyearpar{yang2024}.
+
+% ===========================================================================
+\section{Conclusion}
+
+This paper has demonstrated that computational text analysis can reveal meaningful patterns in the evolution of American political rhetoric across seven decades and fifteen presidencies. The central finding---that historical period structures presidential language at least as powerfully as party affiliation---has implications for how we interpret claims about partisan polarization. The language of the State of the Union tracks the world the president inhabits: the wars, the economic crises, the technological transformations that shape what is sayable and what must be said. Party affiliation modulates this language, but it does not determine it.
+
+More broadly, this project illustrates the productive tension at the heart of computational approaches to textuality. The methods of distant reading allow us to see what no close reader could: the slow drift of political vocabulary across 79 speeches and 76 years, the rise and fall of thematic preoccupations, the gradual informalization of presidential speech. But those patterns require interpretation to become arguments. The most interesting result of this analysis is not a classification accuracy or a topic distribution---it is the recognition that political language, like literary language, is shaped by forces larger than any individual speaker's intentions \citep{moretti2013, witmore2012}.
+
+\subsection*{Code and Data Availability}
+
+All code, data, and figures for this project are available in the project GitHub repository. The analysis pipeline is implemented in Python using scikit-learn, NLTK, and Matplotlib. The SOTU corpus was assembled from the \texttt{stdlib-js/datasets-sotu} repository (1950--2020) and the American Presidency Project (2021--2026).
+
+% ===========================================================================
+% References on a separate page
+\newpage
+\onecolumn
+\bibliographystyle{apalike}
+\bibliography{references}
+
+\end{document}
