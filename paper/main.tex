@@ -17,6 +17,7 @@
 \usepackage{microtype}
 
 \setlength{\columnsep}{0.3in}
+\raggedbottom
 
 \title{\textbf{The Shifting Lexicon of American Power:\\Computational Analysis of Political Language\\in State of the Union Addresses, 1950--2026}}
 
@@ -55,8 +56,6 @@ This two-source approach introduces a minor inconsistency: the stdlib-js texts a
 
 The decision to begin in 1950 reflects both pragmatic and analytical considerations. Before the mid-twentieth century, SOTU addresses were almost exclusively written messages sent to Congress---a fundamentally different genre from the televised oral address that became standard after Truman. Our corpus captures a relatively coherent rhetorical form, even as that form evolves from radio-era formality to the applause-punctuated cadences of contemporary addresses.
 
-Table~\ref{tab:corpus} summarizes the corpus by president.
-
 \begin{table}[h]
 \centering
 \small
@@ -87,7 +86,7 @@ Trump (2nd) & R & 2025--26 & 2 \\
 \end{tabular}
 \end{table}
 
-The corpus contains 37 Democratic speeches and 42 Republican speeches---a modest imbalance reflecting the distribution of presidential terms across the period. The average speech length is approximately 6,014 words, though with substantial variation: Carter's 1981 written message exceeds 33,000 words, while Nixon's 1973 message---a brief, formally written report submitted at the start of his second term---falls below 1,700. This variance is itself analytically significant, as it indexes the persistence of written policy documents alongside performed oratory across the postwar period.
+As Table~\ref{tab:corpus} summarizes, the corpus contains 37 Democratic speeches and 42 Republican speeches---a modest imbalance reflecting the distribution of presidential terms across the period. The average speech length is approximately 6,014 words, though with substantial variation: Carter's 1981 written message exceeds 33,000 words, while Nixon's 1973 message---a brief, formally written report submitted at the start of his second term---falls below 1,700. This variance is itself analytically significant, as it indexes the persistence of written policy documents alongside performed oratory across the postwar period.
 
 \subsection{Preprocessing Pipeline}
 
