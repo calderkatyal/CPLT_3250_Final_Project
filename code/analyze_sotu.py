@@ -381,7 +381,7 @@ def fig5_embeddings(df):
 # =============================================================================
 def fig6_readability(df):
     """Average sentence length and readability metrics over time."""
-    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7))
 
     # Average sentence length
     ax = axes[0]
