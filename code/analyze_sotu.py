@@ -24,12 +24,12 @@ import matplotlib.ticker as ticker
 import seaborn as sns
 from collections import Counter
 
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer, ENGLISH_STOP_WORDS
 from sklearn.decomposition import LatentDirichletAllocation, PCA, TruncatedSVD
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import LinearSVC
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.model_selection import cross_val_score, cross_val_predict, StratifiedKFold
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
@@ -45,10 +45,38 @@ DATA_DIR = os.path.join(BASE_DIR, '..', 'data')
 FIG_DIR = os.path.join(BASE_DIR, '..', 'paper', 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 
+# Contraction fragments produced by tokenizers splitting "we've" -> "we"+"'ve" etc.
+# These appear as bare tokens (e.g., "ve", "ll") and otherwise pollute LDA/TF-IDF.
+CONTRACTION_FRAGMENTS = {
+    've', 're', 'll', 'nt', 'don', 'didn', 'doesn', 'isn', 'aren',
+    'wasn', 'weren', 'haven', 'hasn', 'hadn', 'couldn', 'wouldn',
+    'shouldn', 'won', 'mustn', 'needn', 'mightn', 'shan',
+}
+CUSTOM_STOPWORDS = list(ENGLISH_STOP_WORDS.union(CONTRACTION_FRAGMENTS))
+
 # Style
 sns.set_theme(style="whitegrid", font_scale=1.1)
 PARTY_COLORS = {'Democrat': '#2166ac', 'Republican': '#b2182b'}
 DECADE_CMAP = plt.cm.viridis
+
+
+def mattr(tokens, window=50):
+    """Moving-Average Type-Token Ratio (Covington & McFall 2010).
+
+    Mean TTR over all sliding windows of fixed size. Unlike raw TTR, MATTR
+    is independent of document length (longer documents do not mechanically
+    yield lower scores).
+    """
+    n = len(tokens)
+    if n < window:
+        return len(set(tokens)) / max(n, 1)
+    ratios = []
+    # Step in 1-token increments; for very long docs sub-sample to keep it fast.
+    step = max(1, n // 5000)
+    for i in range(0, n - window + 1, step):
+        win = tokens[i:i + window]
+        ratios.append(len(set(win)) / window)
+    return float(np.mean(ratios)) if ratios else 0.0
 
 
 def load_corpus():
@@ -59,7 +87,7 @@ def load_corpus():
 
     # Build DataFrame
     rows = []
-    stop_words = set(stopwords.words('english'))
+    stop_words = set(stopwords.words('english')) | CONTRACTION_FRAGMENTS
     for s in speeches:
         text = s['text']
         words = word_tokenize(text.lower())
@@ -78,6 +106,9 @@ def load_corpus():
             'sentence_count': len(sentences),
             'avg_sentence_len': np.mean([len(word_tokenize(sent)) for sent in sentences]) if sentences else 0,
             'type_token_ratio': len(set(words_alpha)) / max(len(words_alpha), 1),
+            # MATTR: moving-average TTR over a 50-token window. Length-corrected
+            # alternative to raw TTR (which decreases mechanically with length).
+            'mattr': mattr(words_alpha, window=50),
             'decade': (s['year'] // 10) * 10
         })
 
@@ -108,17 +139,17 @@ def fig1_speech_length_over_time(df):
     ax.set_title('State of the Union Address Length (1950–2026)')
     ax.legend(loc='upper right', fontsize=9)
 
-    # Type-token ratio over time
+    # MATTR (length-corrected vocabulary richness) over time
     ax = axes[1]
     for party, color in PARTY_COLORS.items():
         mask = df['party'] == party
-        ax.scatter(df.loc[mask, 'year'], df.loc[mask, 'type_token_ratio'],
+        ax.scatter(df.loc[mask, 'year'], df.loc[mask, 'mattr'],
                    c=color, label=party, alpha=0.7, s=50, edgecolors='white', linewidth=0.5)
-    rolling_ttr = df_sorted.groupby('year')['type_token_ratio'].mean().rolling(5, min_periods=1).mean()
+    rolling_ttr = df_sorted.groupby('year')['mattr'].mean().rolling(5, min_periods=1).mean()
     ax.plot(rolling_ttr.index, rolling_ttr.values, 'k--', alpha=0.5, linewidth=1.5)
-    ax.set_ylabel('Type-Token Ratio')
+    ax.set_ylabel('MATTR (window=50)')
     ax.set_xlabel('Year')
-    ax.set_title('Vocabulary Richness (Type-Token Ratio)')
+    ax.set_title('Vocabulary Richness (Moving-Average TTR, length-corrected)')
 
     plt.tight_layout()
     path = os.path.join(FIG_DIR, 'fig1_speech_length.pdf')
@@ -133,7 +164,7 @@ def fig1_speech_length_over_time(df):
 def fig2_partisan_language(df):
     """Top distinctive words for each party using TF-IDF."""
     # Use per-speech TF-IDF, then average by party for more robust results
-    tfidf = TfidfVectorizer(max_features=5000, stop_words='english',
+    tfidf = TfidfVectorizer(max_features=5000, stop_words=CUSTOM_STOPWORDS,
                             ngram_range=(1, 2), min_df=3, max_df=0.9)
     tfidf_matrix = tfidf.fit_transform(df['text'])
     feature_names = tfidf.get_feature_names_out()
@@ -190,7 +221,7 @@ def fig2_partisan_language(df):
 def fig3_topic_modeling(df, n_topics=8):
     """LDA topic model with temporal evolution of topics."""
     # Fit LDA
-    count_vec = CountVectorizer(max_features=5000, stop_words='english',
+    count_vec = CountVectorizer(max_features=5000, stop_words=CUSTOM_STOPWORDS,
                                 min_df=3, max_df=0.9)
     doc_term = count_vec.fit_transform(df['text'])
     feature_names = count_vec.get_feature_names_out()
@@ -254,7 +285,7 @@ def fig3_topic_modeling(df, n_topics=8):
 # =============================================================================
 def fig4_classification(df):
     """Classify speeches by party using multiple models."""
-    tfidf = TfidfVectorizer(max_features=3000, stop_words='english',
+    tfidf = TfidfVectorizer(max_features=3000, stop_words=CUSTOM_STOPWORDS,
                             ngram_range=(1, 2), min_df=2)
     X = tfidf.fit_transform(df['text'])
     y = (df['party'] == 'Republican').astype(int).values
@@ -284,7 +315,9 @@ def fig4_classification(df):
     ax.set_ylabel('5-Fold Cross-Validation Accuracy')
     ax.set_title('Party Classification from SOTU Text')
     ax.set_ylim(0.4, 1.0)
-    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5, label='Chance level')
+    baseline = max(np.mean(y == 0), np.mean(y == 1))  # majority-class baseline
+    ax.axhline(y=baseline, color='gray', linestyle='--', alpha=0.5,
+               label=f'Majority-class baseline ({baseline:.2f})')
     for bar, mean, std in zip(bars, means, stds):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 0.01,
                 f'{mean:.2f}', ha='center', fontsize=10, fontweight='bold')
@@ -296,10 +329,11 @@ def fig4_classification(df):
     plt.close()
     print(f"  Saved {path}")
 
-    # Figure 4b: Confusion matrix for best model (Logistic Regression)
-    best_model = LogisticRegression(max_iter=1000, C=1.0, random_state=42)
-    best_model.fit(X, y)
-    y_pred = best_model.predict(X)  # in-sample for confusion display
+    # Figure 4b: Confusion matrix for best model (Linear SVM), built from
+    # held-out 5-fold CV predictions (NOT in-sample) so the figure reflects
+    # the same accuracy as Fig. 4a.
+    best_model = LinearSVC(max_iter=2000, C=1.0, random_state=42)
+    y_pred = cross_val_predict(best_model, X, y, cv=cv)
     cm = confusion_matrix(y, y_pred)
     fig, ax = plt.subplots(figsize=(5, 4))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
@@ -307,16 +341,18 @@ def fig4_classification(df):
                 yticklabels=['Democrat', 'Republican'])
     ax.set_xlabel('Predicted')
     ax.set_ylabel('Actual')
-    ax.set_title('Confusion Matrix (Logistic Regression, In-Sample)')
+    ax.set_title('Confusion Matrix (Linear SVM, 5-Fold CV)')
     plt.tight_layout()
     path = os.path.join(FIG_DIR, 'fig4b_confusion.pdf')
     fig.savefig(path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"  Saved {path}")
 
-    # Get top features from logistic regression
+    # Top coefficients from a logistic regression fit (for interpretability)
+    interp_model = LogisticRegression(max_iter=1000, C=1.0, random_state=42)
+    interp_model.fit(X, y)
     feature_names = tfidf.get_feature_names_out()
-    coef = best_model.coef_[0]
+    coef = interp_model.coef_[0]
     top_dem_idx = np.argsort(coef)[:15]
     top_rep_idx = np.argsort(coef)[-15:][::-1]
     top_dem_feats = [(feature_names[i], coef[i]) for i in top_dem_idx]
@@ -330,7 +366,7 @@ def fig4_classification(df):
 # =============================================================================
 def fig5_embeddings(df):
     """Visualize speeches in 2D embedding space using TF-IDF + t-SNE."""
-    tfidf = TfidfVectorizer(max_features=3000, stop_words='english', min_df=2)
+    tfidf = TfidfVectorizer(max_features=3000, stop_words=CUSTOM_STOPWORDS, min_df=2)
     X = tfidf.fit_transform(df['text'])
 
     # Reduce dimensionality first with SVD, then t-SNE
@@ -396,21 +432,21 @@ def fig6_readability(df):
     ax.set_title('Sentence Complexity in SOTU Addresses')
     ax.legend(fontsize=9)
 
-    # Unique words / total words by decade (boxplot)
+    # Length-corrected vocabulary diversity (MATTR) by decade and party
     ax = axes[1]
     decade_data = []
     for _, row in df.iterrows():
         decade_data.append({
             'decade': str(row['decade']) + 's',
             'party': row['party'],
-            'unique_pct': row['unique_words'] / max(row['word_count'], 1) * 100
+            'mattr': row['mattr'],
         })
     decade_df = pd.DataFrame(decade_data)
-    sns.boxplot(data=decade_df, x='decade', y='unique_pct', hue='party',
+    sns.boxplot(data=decade_df, x='decade', y='mattr', hue='party',
                 palette=PARTY_COLORS, ax=ax, linewidth=0.8)
     ax.set_xlabel('Decade')
-    ax.set_ylabel('Unique Words (%)')
-    ax.set_title('Vocabulary Diversity by Decade and Party')
+    ax.set_ylabel('MATTR (window=50)')
+    ax.set_title('Length-Corrected Vocabulary Diversity by Decade and Party')
     ax.legend(fontsize=9)
 
     plt.tight_layout()
@@ -425,25 +461,47 @@ def fig6_readability(df):
 # =============================================================================
 def fig7_keyword_trends(df):
     """Track frequency of key political terms over time."""
+    # Each list enumerates surface forms (singular, plural, simple inflections)
+    # because we now match at the token level rather than via substring search.
     keywords = {
-        'Security & Defense': ['security', 'defense', 'military', 'terrorism', 'war', 'nuclear'],
-        'Economy': ['economy', 'jobs', 'tax', 'budget', 'deficit', 'growth', 'inflation'],
-        'Social Policy': ['education', 'health', 'healthcare', 'poverty', 'welfare', 'housing'],
-        'Foreign Policy': ['allies', 'peace', 'diplomacy', 'trade', 'international', 'foreign'],
+        'Security & Defense': [
+            'security', 'defense', 'defenses', 'military', 'terrorism',
+            'terrorist', 'terrorists', 'war', 'wars', 'nuclear',
+        ],
+        'Economy': [
+            'economy', 'economic', 'jobs', 'job', 'tax', 'taxes', 'taxation',
+            'budget', 'budgets', 'deficit', 'deficits', 'growth', 'inflation',
+        ],
+        'Social Policy': [
+            'education', 'educational', 'health', 'healthcare', 'poverty',
+            'welfare', 'housing',
+        ],
+        'Foreign Policy': [
+            'allies', 'ally', 'peace', 'peaceful', 'diplomacy', 'diplomatic',
+            'trade', 'international', 'foreign',
+        ],
     }
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
     axes = axes.flatten()
 
+    # Precompute word-level token lists per speech (alphabetic, lowercased) so
+    # that keyword matching is exact rather than substring (e.g., "war" must
+    # not match "toward" or "forward").
+    token_lists = []
+    for _, row in df.iterrows():
+        toks = [w for w in word_tokenize(row['text'].lower()) if w.isalpha()]
+        token_lists.append(toks)
+
     for idx, (category, words) in enumerate(keywords.items()):
         ax = axes[idx]
-        # Calculate frequency per speech
+        word_set = set(words)
+        # Calculate frequency per speech (exact token match, per 1000 words)
         freqs = []
-        for _, row in df.iterrows():
-            text_lower = row['text'].lower()
-            total_words = max(row['word_count'], 1)
-            count = sum(text_lower.count(w) for w in words)
-            freqs.append(count / total_words * 1000)  # per 1000 words
+        for tokens in token_lists:
+            total_words = max(len(tokens), 1)
+            count = sum(1 for t in tokens if t in word_set)
+            freqs.append(count / total_words * 1000)
 
         df_temp = df[['year', 'party']].copy()
         df_temp['freq'] = freqs
@@ -546,12 +604,24 @@ def main():
     fig8_wordclouds(df)
 
     # Save summary statistics
+    decade_word_counts = df.groupby('decade')['word_count'].mean().to_dict()
+    decade_mattr = df.groupby('decade')['mattr'].mean().to_dict()
+    decade_ttr = df.groupby('decade')['type_token_ratio'].mean().to_dict()
+    party_mattr = df.groupby('party')['mattr'].mean().to_dict()
+    party_ttr = df.groupby('party')['type_token_ratio'].mean().to_dict()
+    decade_sentlen = df.groupby('decade')['avg_sentence_len'].mean().to_dict()
     stats = {
         'n_speeches': len(df),
         'year_range': f"{df['year'].min()}-{df['year'].max()}",
         'dem_speeches': int((df['party'] == 'Democrat').sum()),
         'rep_speeches': int((df['party'] == 'Republican').sum()),
         'avg_word_count': float(df['word_count'].mean()),
+        'decade_word_count_mean': {str(k): float(v) for k, v in decade_word_counts.items()},
+        'decade_mattr_mean': {str(k): float(v) for k, v in decade_mattr.items()},
+        'decade_ttr_mean': {str(k): float(v) for k, v in decade_ttr.items()},
+        'party_mattr_mean': {k: float(v) for k, v in party_mattr.items()},
+        'party_ttr_mean': {k: float(v) for k, v in party_ttr.items()},
+        'decade_avg_sentence_len': {str(k): float(v) for k, v in decade_sentlen.items()},
         'classification_results': {name: {'mean': float(scores.mean()), 'std': float(scores.std())}
                                    for name, scores in clf_results.items()},
         'topic_labels': topic_labels,
